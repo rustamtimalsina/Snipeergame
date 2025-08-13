@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sniper Game — Deluxe</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    :root {
+      --hud-bg: rgba(0,0,0,.55);
+      --accent: #00e1ff;
+      --good: #4caf50;
+      --warn: #ff9800;
+      --bad:  #f44336;
+    }
+    html, body { height: 100%; margin: 0; }
+    body { background:#111; color:#eee; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif; overflow: hidden; }
+    canvas { display:block; width:100vw; height:100vh; background: radial-gradient(ellipse at center, #263238 0%, #101417 65%); cursor: none; }
+
+    /* HUD */
+    .hud { position: fixed; inset: 0; pointer-events: none; }
+    .hud .row { --bs-gutter-x: .75rem; }
+    .badge { font-weight: 600; letter-spacing:.3px; }
+    .pill { background: var(--hud-bg); border: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(6px); border-radius: 14px; padding:.35rem .6rem; }
+
+    .topbar { position: absolute; top: 10px; left: 0; right: 0; display:flex; justify-content: center; }
+    .topbar > div { display:flex; gap:.5rem; flex-wrap: wrap; }
+
+    .rightbar { position: absolute; top: 10px; right: 10px; display:flex; gap:.5rem; flex-direction: column; align-items: end; }
+
+    .bottombar { position: absolute; bottom: 10px; left: 0; right: 0; display:flex; justify-content:center; }
+
+    .controls { pointer-events: auto; display:flex; gap:.5rem; }
+
+    .overlay { position: fixed; inset:0; display:grid; place-items:center; background: rgba(0,0,0,.65); opacity:0; visibility:hidden; transition: opacity .25s ease, visibility .25s ease; }
+    .overlay.show { opacity:1; visibility:visible; }
+
+    .panel { background: #0e1418; border:1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 20px; width:min(600px, 92vw); box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+    .panel h1 { font-size: clamp(22px, 3.5vw, 34px); margin:0 0 6px; }
+    .panel p { color:#b8c5cc; margin:0 0 10px; }
+
+    .btn-main { pointer-events:auto; }
+
+    /* Crosshair */
+    .crosshair { position: fixed; width: 38px; height: 38px; pointer-events:none; transform: translate(-50%,-50%); filter: drop-shadow(0 0 4px rgba(0,225,255,.35)); }
+    .crosshair svg { width:100%; height:100%; }
+
+    /* Toast */
+    .toast-area { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display:flex; gap:.5rem; pointer-events:none; }
+    .toast-area .toast-msg { background: var(--hud-bg); border:1px solid rgba(255,255,255,.08); padding:.35rem .6rem; border-radius:12px; opacity:0; transform: translateY(12px); transition: .25s ease; }
+    .toast-area .toast-msg.show { opacity:1; transform: translateY(0); }
+
+    /* Mobile aim reticle hint */
+    @media (max-width: 768px) {
+      canvas { cursor: crosshair; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- HUD -->
+  <div class="hud">
+    <div class="topbar">
+      <div>
+        <span class="pill">Score: <span id="ui-score" class="badge text-bg-info ms-1">0</span></span>
+        <span class="pill">Level: <span id="ui-level" class="badge text-bg-primary ms-1">1</span></span>
+        <span class="pill">Combo: <span id="ui-combo" class="badge text-bg-success ms-1">x1</span></span>
+        <span class="pill">Ammo: <span id="ui-ammo" class="badge text-bg-warning ms-1">8</span></span>
+        <span class="pill">Lives: <span id="ui-lives" class="badge text-bg-danger ms-1">3</span></span>
+        <span class="pill">Best: <span id="ui-best" class="badge text-bg-secondary ms-1">0</span></span>
+      </div>
+    </div>
+
+    <div class="rightbar">
+      <div class="controls">
+        <button id="btn-start" class="btn btn-success btn-sm btn-main">Start</button>
+        <button id="btn-pause" class="btn btn-outline-light btn-sm btn-main" disabled>Pause</button>
+        <button id="btn-restart" class="btn btn-outline-info btn-sm btn-main" disabled>Restart</button>
+        <button id="btn-settings" class="btn btn-outline-secondary btn-sm btn-main">Settings</button>
+      </div>
+    </div>
+
+    <div class="bottombar">
+      <div class="pill small">Controls: Click/Tap to shoot • R to reload • P to pause</div>
+    </div>
+  </div>
+
+  <!-- Start / Pause / Game Over overlays -->
+  <div id="ovl" class="overlay show">
+    <div class="panel">
+      <h1>Sniper Game — Deluxe</h1>
+      <p class="mb-2">Shoot targets, keep your combo, and survive. Missed targets cost lives. Good luck.</p>
+      <ul class="mb-3">
+        <li>Headshot ring (inner) yields more points</li>
+        <li>Combo increases with consecutive hits (decays on miss)</li>
+        <li>Reload with <kbd>R</kbd> when ammo hits zero</li>
+      </ul>
+      <div class="d-flex gap-2 flex-wrap">
+        <button id="ovl-start" class="btn btn-success">Start</button>
+        <button id="ovl-how" class="btn btn-outline-light">How to Play</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings" class="overlay">
+    <div class="panel">
+      <h1>Settings</h1>
+      <div class="row g-2 mb-2">
+        <div class="col-12 col-md-6">
+          <label class="form-label">Difficulty</label>
+          <select id="opt-diff" class="form-select form-select-sm">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label">Starting Ammo</label>
+          <input id="opt-ammo" type="number" class="form-control form-control-sm" min="3" max="20" value="8" />
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap mt-2">
+        <button id="opt-save" class="btn btn-primary">Save</button>
+        <button id="opt-cancel" class="btn btn-outline-light">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-area" id="toast"></div>
+
+  <!-- Crosshair -->
+  <div id="xh" class="crosshair" aria-hidden="true">
+    <svg viewBox="0 0 48 48">
+      <circle cx="24" cy="24" r="10" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".9"/>
+      <line x1="24" y1="2" x2="24" y2="12" stroke="var(--accent)" stroke-width="1.5" />
+      <line x1="24" y1="36" x2="24" y2="46" stroke="var(--accent)" stroke-width="1.5" />
+      <line x1="2" y1="24" x2="12" y2="24" stroke="var(--accent)" stroke-width="1.5" />
+      <line x1="36" y1="24" x2="46" y2="24" stroke="var(--accent)" stroke-width="1.5" />
+    </svg>
+  </div>
+
+ <script>
+  // ===== Utility =====
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+  const rand = (a, b) => Math.random() * (b - a) + a;
+
+  // ===== Canvas Setup =====
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    canvas.width = Math.floor(window.innerWidth * DPR);
+    canvas.height = Math.floor(window.innerHeight * DPR);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ===== Game State =====
+  const state = {
+    running: false,
+    paused: false,
+    score: 0,
+    level: 1,
+    lives: 3,
+    combo: 1,
+    comboTime: 0,
+    best: Number(localStorage.getItem('sniper.best') || 0),
+    ammo: 8,
+    ammoMax: 8,
+    reloadTime: 0,
+    targets: [],
+    bullets: [],
+    effects: [],
+    timer: 0,
+    difficulty: 'normal',
+  };
+
+  const DIFF = {
+    easy:   { baseSpeed: 55, spawn: 1100, missPenalty: 1, hp: 1 },
+    normal: { baseSpeed: 75, spawn: 900,  missPenalty: 1, hp: 1 },
+    hard:   { baseSpeed: 95, spawn: 750,  missPenalty: 2, hp: 2 },
+  };
+
+  const ui = {
+    score: document.getElementById('ui-score'),
+    level: document.getElementById('ui-level'),
+    combo: document.getElementById('ui-combo'),
+    lives: document.getElementById('ui-lives'),
+    ammo:  document.getElementById('ui-ammo'),
+    best:  document.getElementById('ui-best'),
+    btnStart: document.getElementById('btn-start'),
+    btnPause: document.getElementById('btn-pause'),
+    btnRestart: document.getElementById('btn-restart'),
+    btnSettings: document.getElementById('btn-settings'),
+    ovl: document.getElementById('ovl'),
+    ovlStart: document.getElementById('ovl-start'),
+    ovlHow: document.getElementById('ovl-how'),
+    settings: document.getElementById('settings'),
+    optDiff: document.getElementById('opt-diff'),
+    optAmmo: document.getElementById('opt-ammo'),
+    optSave: document.getElementById('opt-save'),
+    optCancel: document.getElementById('opt-cancel'),
+    toast: document.getElementById('toast'),
+    xh: document.getElementById('xh')
+  };
+
+  function syncUI() {
+    ui.score.textContent = state.score;
+    ui.level.textContent = state.level;
+    ui.combo.textContent = 'x' + state.combo;
+    ui.lives.textContent = state.lives;
+    ui.ammo.textContent  = state.ammo;
+    ui.best.textContent  = state.best;
+  }
+
+  function showOverlay(el, show=true) { el.classList.toggle('show', show); }
+
+  function toast(msg, dur=1200) {
+    const el = document.createElement('div');
+    el.className = 'toast-msg';
+    el.textContent = msg;
+    ui.toast.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => { el.classList.remove('show'); setTimeout(()=> el.remove(), 250); }, dur);
+  }
+
+  const AC = new (window.AudioContext || window.webkitAudioContext)();
+  function beep({freq=440, type='square', t=0.05, gain=0.02}={}) {
+    const o = AC.createOscillator();
+    const g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.value = gain; o.connect(g); g.connect(AC.destination);
+    o.start(); g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + t);
+    o.stop(AC.currentTime + t);
+  }
+
+  const sfx = {
+    shoot(){ beep({freq: 220, t:0.03, type:'square', gain:0.05}); },
+    hit(){ beep({freq: 660, t:0.06, type:'triangle', gain:0.06}); },
+    headshot(){ beep({freq: 880, t:0.08, type:'sine', gain:0.07}); },
+    reload(){ beep({freq: 300, t:0.08, type:'sawtooth', gain:0.05}); },
+    empty(){ beep({freq: 110, t:0.06, type:'square', gain:0.04}); },
+    damage(){ beep({freq: 90, t:0.1, type:'square', gain:0.06}); }
+  };
+
+  class Target {
+    constructor(x, y, r, type='standard') {
+      this.x = x; this.y = y; this.r = r; this.type = type; this.alive = true;
+      this.hp = DIFF[state.difficulty].hp;
+      const base = DIFF[state.difficulty].baseSpeed;
+      const levelBoost = state.level * 6;
+      this.vy = rand(base-10, base+10) / 60 + levelBoost/60;
+      this.vx = rand(-40, 40) / 60;
+      this.wobble = rand(0.8, 1.6);
+      this.age = 0;
+    }
+    step(dt) {
+      this.age += dt;
+      this.y += this.vy * dt * 60;
+      this.x += Math.sin(this.age * this.wobble) * 0.8 + this.vx * dt * 60;
+      if (this.x < this.r) this.x = this.r;
+      if (this.x > canvas.width / DPR - this.r) this.x = canvas.width / DPR - this.r;
+    }
+    draw(g) {
+      const x = this.x, y = this.y, r = this.r;
+      g.save();
+      g.shadowColor = 'rgba(0,0,0,.6)'; g.shadowBlur = 8; g.translate(x, y);
+      g.beginPath(); g.arc(0,0,r,0,Math.PI*2); g.fillStyle = '#e53935'; g.fill();
+      g.beginPath(); g.arc(0,0,r*0.72,0,Math.PI*2); g.fillStyle = '#fafafa'; g.fill();
+      g.beginPath(); g.arc(0,0,r*0.48,0,Math.PI*2); g.fillStyle = '#e53935'; g.fill();
+      g.beginPath(); g.arc(0,0,r*0.23,0,Math.PI*2); g.fillStyle = '#212121'; g.fill();
+      g.restore();
+    }
+  }
+
+  class Particle {
+    constructor(x, y) { this.x=x; this.y=y; this.vx=rand(-2,2); this.vy=rand(-2,2); this.life=1; this.size=rand(2,4); }
+    step(dt){ this.x+=this.vx*60*dt; this.y+=this.vy*60*dt; this.vy+=0.03; this.life-=dt*1.4; }
+    draw(g){ g.globalAlpha = Math.max(this.life,0); g.fillStyle = '#ffd54f'; g.fillRect(this.x, this.y, this.size, this.size); g.globalAlpha=1; }
+  }
+
+  let spawnTimer = 0;
+  function spawnTarget() {
+    const r = rand(20, 34);
+    const x = rand(r+10, canvas.width/DPR - r - 10);
+    const y = -r - 10;
+    state.targets.push(new Target(x,y,r));
+  }
+
+  let mouse = {x: innerWidth/2, y: innerHeight/2};
+  window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX; mouse.y = e.clientY;
+    ui.xh.style.left = mouse.x + 'px';
+    ui.xh.style.top  = mouse.y + 'px';
+  });
+  window.addEventListener('touchstart', e => {
+    const t = e.touches[0]; if(!t) return; mouse.x = t.clientX; mouse.y = t.clientY;
+    ui.xh.style.left = mouse.x + 'px'; ui.xh.style.top = mouse.y + 'px';
+    shoot(mouse.x, mouse.y);
+  }, {passive:true});
+  window.addEventListener('click', e => { if(state.running && !state.paused) shoot(e.clientX, e.clientY); });
+  window.addEventListener('keydown', e => { if(e.key==='r'||e.key==='R') reload(); if(e.key==='p'||e.key==='P') togglePause(); if(!state.running&&(e.key===' ')) startGame(); });
+
+  function reload(){
+    if (state.ammo === state.ammoMax) { toast('Ammo full'); return; }
+    state.reloadTime = 0.4;
+    sfx.reload();
+    setTimeout(()=>{ state.ammo = state.ammoMax; syncUI(); }, 380);
+  }
+
+  function shoot(px, py){
+    if (!state.running || state.paused) return;
+    if (state.reloadTime > 0) return;
+    if (state.ammo <= 0) { sfx.empty(); toast('Out of ammo! Press R'); return; }
+    state.ammo--; syncUI(); sfx.shoot();
+
+    const x = px; const y = py;
+    const hitIndex = state.targets.findIndex(t => {
+      const dx = x - t.x, dy = y - t.y;
+      return Math.hypot(dx, dy) <= t.r;
+    });
+
+    if(hitIndex >= 0){
+      const t = state.targets[hitIndex];
+      const d = Math.hypot(x-t.x, y-t.y);
+      const inner = t.r*0.23, mid = t.r*0.48;
+      let gained = 0;
+      if(d<=inner){ gained=30; sfx.headshot(); toast('HEADSHOT! +' + (gained*state.combo)); }
+      else if(d<=mid){ gained=20; sfx.hit(); }
+      else{ gained=10; sfx.hit(); }
+
+      state.score += gained * state.combo;
+      state.combo = Math.min(state.combo+1,10);
+      state.comboTime = 2.2;
+      for(let i=0;i<14;i++) state.effects.push(new Particle(t.x,t.y));
+
+      t.hp -= 1;
+      if(t.hp <=0) state.targets.splice(hitIndex,1);
+      syncUI();
+    } else {
+      state.combo = Math.max(1, Math.floor(state.combo*0.7));
+      state.comboTime = 1.5;
+      syncUI();
+    }
+  }
+
+  function startGame(){
+    state.running=true; state.paused=false;
+    state.score=0; state.level=1; state.lives=3;
+    state.combo=1; state.comboTime=0; state.targets=[]; state.effects=[]; spawnTimer=0;
+    state.ammo = state.ammoMax; syncUI();
+    ui.btnPause.disabled=false; ui.btnRestart.disabled=false; ui.btnStart.disabled=true;
+    showOverlay(ui.ovl,false);
+
+    spawnTarget(); // first target immediately
+    lastTime = performance.now();
+    loop(lastTime);
+  }
+
+  function gameOver(){
+    state.running=false; state.paused=false;
+    state.best = Math.max(state.best, state.score); localStorage.setItem('sniper.best', state.best);
+    syncUI();
+    showOverlay(ui.ovl,true);
+    ui.ovl.querySelector('h1').textContent='Game Over';
+    ui.ovl.querySelector('p').textContent=`Final score: ${state.score} • Best: ${state.best}`;
+    ui.btnPause.disabled=true; ui.btnStart.disabled=false;
+  }
+
+  function togglePause(){
+    if(!state.running) return;
+    state.paused = !state.paused;
+    ui.btnPause.textContent = state.paused ? 'Resume' : 'Pause';
+    showOverlay(ui.ovl, state.paused);
+    ui.ovl.querySelector('h1').textContent = state.paused ? 'Paused' : 'Sniper Game — Deluxe';
+    ui.ovl.querySelector('p').textContent = state.paused ? 'Press P to resume or click Resume.' : 'Shoot targets, keep your combo, and survive. Good luck.';
+    if(!state.paused) lastTime = performance.now();
+  }
+
+  let lastTime = 0;
+  function loop(t){
+    if(!state.running) return;
+    const dt = Math.min((t-lastTime)/1000||0,0.05);
+    lastTime = t;
+    if(!state.paused) { update(dt); draw(); }
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+  state.timer += dt;
+
+  // Level increases every 20 seconds
+  state.level = 1 + Math.floor(state.timer / 20);
+
+  // Combo timer
+  if(state.combo > 1){ 
+    state.comboTime -= dt; 
+    if(state.comboTime <= 0) state.combo = 1; 
+  }
+
+  // Reload timer
+  if(state.reloadTime > 0) state.reloadTime = Math.max(0, state.reloadTime - dt);
+
+  // Smooth spawn interval
+  const baseSpawn = DIFF[state.difficulty].spawn; // 900 for normal
+  const spawnEvery = clamp(baseSpawn - state.level * 25, 350, 2000); // slightly faster per level
+  spawnTimer += dt * 1000;
+  if(spawnTimer >= spawnEvery){ 
+    spawnTimer -= spawnEvery; 
+    spawnTarget(); 
+  }
+
+  // Update targets
+  for(let i = state.targets.length - 1; i >= 0; i--){
+    const t = state.targets[i]; 
+    t.step(dt);
+    if(t.y - t.r > canvas.height / DPR){
+      state.targets.splice(i, 1);
+      state.lives -= DIFF[state.difficulty].missPenalty; 
+      sfx.damage(); 
+      toast('-' + DIFF[state.difficulty].missPenalty + ' life', 900);
+      state.combo = 1; state.comboTime = 0; 
+      syncUI();
+      if(state.lives <= 0) return gameOver();
+    }
+  }
+
+  // Update particle effects
+  for(let i = state.effects.length - 1; i >= 0; i--){ 
+    const p = state.effects[i]; 
+    p.step(dt); 
+    if(p.life <= 0) state.effects.splice(i, 1);
+  }
+
+  // Smooth speed ramp
+  state.targets.forEach(t => {
+    t.vy = DIFF[state.difficulty].baseSpeed / 60 + state.level * 0.1;
+    t.vx *= 0.98; // slight horizontal friction
+  });
+
+  syncUI();
+}
+
+// Spawn target with slight randomization
+function spawnTarget() {
+  const r = rand(20, 34);
+  const x = rand(r + 10, canvas.width / DPR - r - 10);
+  const y = -r - 10;
+  const t = new Target(x, y, r);
+  // Slightly easier early targets
+  if(state.level <= 2) t.hp = 1; 
+  state.targets.push(t);
+}
+
+
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.save(); ctx.globalAlpha=0.12; ctx.strokeStyle='#9ad1ff'; ctx.lineWidth=1;
+    const spacing=40; for(let x=0;x<canvas.width/DPR;x+=spacing){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height/DPR);ctx.stroke();}
+    for(let y=0;y<canvas.height/DPR;y+=spacing){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width/DPR,y);ctx.stroke();}
+    ctx.restore();
+    state.targets.forEach(t=>t.draw(ctx));
+    state.effects.forEach(p=>p.draw(ctx));
+  }
+
+  ui.btnStart.addEventListener('click', startGame);
+  ui.btnRestart.addEventListener('click', startGame);
+  ui.btnPause.addEventListener('click', togglePause);
+  ui.ovlStart.addEventListener('click', startGame);
+  ui.ovlHow.addEventListener('click', ()=> alert('Shoot targets by clicking/tapping. Inner ring = more points. Keep hitting to raise combo. Missed targets lose lives. Press R to reload, P to pause.'));
+
+  ui.btnSettings.addEventListener('click', ()=> showOverlay(ui.settings,true));
+  ui.optCancel.addEventListener('click', ()=> showOverlay(ui.settings,false));
+  ui.optSave.addEventListener('click', ()=>{
+    state.difficulty = ui.optDiff.value;
+    const ammo = clamp(parseInt(ui.optAmmo.value||'8',10),3,20);
+    state.ammoMax=ammo; state.ammo=ammo; syncUI();
+    showOverlay(ui.settings,false);
+    toast('Settings saved');
+  });
+
+  ui.optDiff.value = state.difficulty;
+  ui.optAmmo.value = state.ammoMax;
+  syncUI();
+</script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
